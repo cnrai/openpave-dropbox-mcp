@@ -132,14 +132,21 @@ must not be able to steer the auth code elsewhere. `[PAVE source — resolveRedi
 ### Outcome 4 — no-redirect manual lane (containers, hosted instances)
 
 Use when discovery cannot complete (see §8) or the callback cannot reach PAVE.
-**End-to-end UNTESTED** — every step below is sourced, but no one has run the
-whole lane yet. Treat it as a hypothesis with citations, not a verified
-procedure. `[PAVE source + web; lane untested]`
+**Verified end to end 2026-11-06** in a Debian 12 sbx container where the
+native lane could not work: app created, authorize URL hand-built, user
+consented, code pasted back, exchange `http=200`, tokens stored, bridge
+verified with `who_am_i` + `get_usage_and_quota`. `[verified 2026-11-06]`
 
 Dropbox makes `redirect_uri` optional on the code flow: when it is omitted, the
 authorization code is displayed on dropbox.com for the user to copy.
 `[web — Dropbox OAuth guide, "Implementing Code Flow"]` That removes both
 blockers at once — no PRM discovery, no callback listener.
+
+**This lane cannot use DCR.** Dynamic client registration rejects a request
+with no `redirect_uris`: `{"error":"invalid_request","error_description":
+"redirect_uris is required"}` `http=400`. So the manual lane always needs your
+own Developer Console app; there is no way to borrow a registered client.
+`[verified 2026-11-06]`
 
 1. Create your own app: Developer Console → **Full Dropbox** → scopes
    `account_info.read files.metadata.read files.content.read
@@ -180,9 +187,10 @@ blockers at once — no PRM discovery, no callback listener.
    code_verifier=<VERIFIER>
    ```
 
-   The guide phrases PKCE as passing `code_verifier` *instead of* `client_id`;
-   most implementations send BOTH. If the exchange answers `invalid_request`,
-   try dropping `client_id` before changing anything else. `[untested]`
+   The guide phrases PKCE as passing `code_verifier` *instead of* `client_id`.
+   Send **both** — verified accepted, `http=200`, all scopes granted.
+   `[verified 2026-11-06 — access_token 1416 chars, refresh_token 64 chars,
+   expires_in 14400 s]`
 6. Store the tokens with the built-in route — it writes
    `MCP__dropbox__ACCESS` / `MCP__dropbox__REFRESH` into `~/.pave/tokens.yaml`
    (no helper script needed, unlike the upstream Google Workspace bridge):
@@ -195,7 +203,9 @@ blockers at once — no PRM discovery, no callback listener.
      -d '{"access":"<access_token>","refresh":"<refresh_token>"}'
    ```
 
-   `[PAVE source — capabilities-routes.js:362]`
+   Returns `{"id":"dropbox","stored":true,"audienceOrigin":"https://mcp.dropbox.com"}`
+   — the `audienceOrigin` pin is set for you here, no separate step.
+   `[PAVE source — capabilities-routes.js:362]` `[verified 2026-11-06]`
 7. Pin the refresh lane. The native flow writes `oauth.tokenEndpoint` as a side
    effect; skipping the flow leaves it absent, and `refreshEligible` then
    returns false — the entry silently never refreshes. It requires all three:
@@ -213,7 +223,8 @@ blockers at once — no PRM discovery, no callback listener.
    ```
 8. Run `capabilities_refresh dropbox`. Mandatory, not optional: the manager
    attaches the token at connect time, so a live connection keeps the old one.
-   `[PAVE source — mcp-manager.js R6]`
+   Returns `Refreshed dropbox — status installed`.
+   `[PAVE source — mcp-manager.js R6]` `[verified 2026-11-06]`
 9. Grant R10 (§1 above), then verify with `who_am_i` and
    `get_usage_and_quota`.
 
@@ -310,16 +321,20 @@ objects. `[verified 2026-11-06 — who_am_i/quota/list_folder all stringified]`
 3. Does the token refresh lane work unattended past the first ~4 h access
    token expiry (no forced re-consent)? `[untested — first e2e ran inside
    one token lifetime]`
-4. Does Outcome 4 (no-redirect manual lane) work end to end — in particular,
-   does Dropbox accept an authorize request with NO `redirect_uri` for an app
-   that has redirect URIs registered, and does the token exchange want
-   `client_id`, `code_verifier`, or both? `[untested]`
+4. ~~Does Outcome 4 work end to end, and does the exchange want `client_id`,
+   `code_verifier`, or both?~~ **Closed 2026-11-06 — YES.** Lane verified end
+   to end; the exchange accepts **both** `client_id` and `code_verifier`.
 5. Does the refresh ladder survive with only a pinned `oauth.tokenEndpoint`
-   (Outcome 4 step 7), i.e. without a `discovery` field on the entry? `[untested]`
+   (Outcome 4 step 7), i.e. without a `discovery` field on the entry?
+   Partly answered: the pins make the entry refresh-**eligible** and
+   `capabilities_refresh` returns `installed`, but the 4 h expiry crossing
+   itself was still pending when this was written. `[untested — check pending]`
 
 Closed 2026-11-06: PRM discovery + public-client AS admission (was Q1) —
 YES, via `www-authenticate`; DCR acceptance (was Q2) — YES, own client id
-issued; live tool surface (was Q3) — 45 tools, table in §3.
+issued; live tool surface (was Q3) — 45 tools, table in §3; Outcome 4 (was Q4)
+— YES, verified end to end, and DCR cannot be used for it (`redirect_uris is
+required`).
 
 ## 8. Troubleshooting — "no protected-resource metadata" in a container
 
@@ -340,16 +355,24 @@ guard throws *before the request is sent*. The gateway is exempted only when
 `SBX_GW_IP` is present in the **server's** env, and only the sbx driver sets it
 (the model cannot set process env). `[PAVE source — fetch-ssrf-guard.js:299, fetch-egress-gateway.js:26-31]`
 
-Caveat on that cause: the guard-block mechanism is read from source and the
-symptom is reproduced, but the *link* between them was never confirmed on the
-affected instance — nobody read `SBX_GW_IP` out of the server's
-`/proc/<pid>/environ`. Confirm it before treating this as closed:
-`tr '\0' '\n' < /proc/<server-pid>/environ | grep SBX_GW_IP`. Absent = the
-guard is the cause; present = look elsewhere and do not trust this section.
-`[inference — mechanism sourced, instance unconfirmed]`
+**Confirmed on the affected instance 2026-11-06.** `[verified 2026-11-06]`
 
-That asymmetry is the tell: `curl` honours the proxy and never asks the guard,
-so it succeeds where PAVE fails.
+```
+tr '\0' '\n' < /proc/1/environ | grep -E 'SBX_GW_IP|HTTPS_PROXY'
+→ HTTPS_PROXY=http://10.212.14.2:3128          (no SBX_GW_IP — guard unexempted)
+getent hosts nonexistent-zzz-12345.example
+→ 10.212.14.2                                  (catch-all: a name that cannot
+                                                exist still resolves)
+```
+
+Three facts together close it: the server is pid 1, it has no `SBX_GW_IP`, and
+DNS answers everything with the gateway address — so `resolveAndCheckHostname`
+sees a `10.0.0.0/8` address for every discovery URL and throws before any
+request is sent. `curl` works because it goes through `HTTPS_PROXY` and never
+consults the guard.
+
+Run the same two commands to classify any instance before choosing a lane
+(§9.0).
 
 **The reported error is misleading.** Both discovery catch blocks discard the
 underlying exception (`catch (e) { /* try the next candidate */ }`), so an SSRF
@@ -374,4 +397,120 @@ Fix options, in the order to try them:
    entirely (Outcome 2), remembering that pins make `clientId` mandatory.
 3. Use the no-redirect manual lane (Outcome 4) — needs neither discovery nor a
    reachable callback, so it also survives a broken `PAVE_PUBLIC_BASE_URL`.
+
+## 9. Setup runbook — zero to working
+
+Follow this top to bottom. §9.0 decides which lane you are on; getting that
+wrong is what costs the most time, because the native lane fails with an error
+that points at the wrong subsystem (§8).
+
+### 9.0 Preflight — two commands, decides everything
+
+```bash
+tr '\0' '\n' < /proc/1/environ | grep -E 'SBX_GW_IP|HTTPS_PROXY'
+getent hosts nonexistent-zzz-12345.example
+```
+
+| Result | Lane | Why |
+|---|---|---|
+| `SBX_GW_IP` present | Native (Outcome 1) | The guard exempts the gateway, so discovery can complete |
+| No `SBX_GW_IP` AND the fake name resolves | **Manual (Outcome 4)** | Catch-all DNS → guard blocks every discovery fetch. `oauth/start` can only fail |
+| Neither | Native, then Outcome 2 | Normal instance; diagnose if discovery still fails |
+
+If the fake name resolves, **do not attempt `oauth/start`**. It cannot succeed,
+and its error message names the wrong subsystem. Go straight to Outcome 4.
+`[verified 2026-11-06]`
+
+### 9.1 Install the doctrine
+
+```bash
+pave install johnmak101-ops/openpave-dropbox-mcp
+cd ~/.pave/skills/dropbox-mcp && git pull --ff-only
+```
+
+`pave install` can land a stale clone — pull before reading the doctrine, or you
+will follow a version that lacks this runbook. Confirm:
+`grep -c 'Outcome 4' SKILL.md` must be >= 1.
+`[verified 2026-11-06 — install landed 0.1.1; a pull was required to pick up the 163-line update]`
+
+### 9.2 Register the server
+
+```bash
+capabilities_add https://mcp.dropbox.com/mcp
+```
+
+Expect `status: error`. That is normal pre-auth, not a failure. **Never run this
+command twice** — it rewrites `auth` to `none` and destroys the config. The
+repair verb is always `capabilities_refresh dropbox`. `[verified 2026-11-06]`
+
+### 9.3 Native lane (only when 9.0 said `SBX_GW_IP` present)
+
+1. Back up `~/.pave/mcp/servers.json`, then set `dropbox.auth.type = "oauth2"`.
+2. `POST /capabilities/mcp/dropbox/oauth/start` with `x-pave-internal-token`
+   and `x-pave-internal-user`.
+3. Present the returned `authorizeUrl` per §9.5.
+4. If the browser is outside the container, set `PAVE_PUBLIC_BASE_URL` first —
+   otherwise the consent redirect cannot reach `/oauth/callback` (§2).
+
+### 9.4 Manual lane (Outcome 4, condensed)
+
+1. **User action** — create the app: Developer Console → **Full Dropbox** →
+   the scopes in §2 → Settings → **Allow public clients** → **Redirect URIs
+   empty**. Only the **App Key** is needed. The App Secret is never used in a
+   public-client PKCE flow: do not ask for it, do not store it, and if the user
+   pastes it anyway, discard it and say so. `[verified 2026-11-06]`
+2. Build the authorize URL (§2 Outcome 4 step 2) and present it per §9.5.
+3. User consents; Dropbox shows the code on the page; user pastes it back.
+4. Exchange with **both** `client_id` and `code_verifier` (§2 step 5).
+5. `PUT /capabilities/mcp/dropbox/tokens` with `{"access","refresh"}`.
+6. Write the refresh pins to `servers.json` (§2 step 7) — read them back and
+   compare verbatim; a typo here silently disables refresh.
+7. `capabilities_refresh dropbox`.
+
+### 9.5 Presenting the authorize URL — do not use a question card
+
+Emit the URL as a **clickable markdown link in the chat reply**:
+
+```
+[Authorize Dropbox](https://www.dropbox.com/oauth2/authorize?client_id=...)
+```
+
+Question-card text is not copyable in the WebUI. An OAuth URL the user cannot
+copy is a dead end, and the whole lane stalls on it.
+`[verified 2026-11-06 — user-reported improvement: "Question-card text is not
+copyable for this user — emit long URLs (e.g. OAuth authorize links) as
+clickable markdown links in the chat reply instead"]`
+
+### 9.6 Grant and verify
+
+```yaml
+# ~/.pave/permissions.yaml
+permissions:
+  mcp:
+    allowed:
+      - mcp:dropbox
+```
+
+Then `tool_search "dropbox"` → **45** tools, `who_am_i`, `get_usage_and_quota`.
+`[verified 2026-11-06]`
+
+### 9.7 Clean up
+
+Delete every temp file that held a token, a code, or a PKCE verifier — e.g.
+`/tmp/dbx-exchange.json`, authorize-URL files, verifier files. Keep
+`tokens.yaml` at mode 0600. `[verified 2026-11-06]`
+
+### 9.8 Known-good state — what "done" looks like
+
+| Artifact | Expected value |
+|---|---|
+| `servers.json → dropbox.status` | `installed` |
+| `servers.json → dropbox.auth` | `type: "oauth2"` + `oauth.{clientId, tokenEndpoint, authorizeUrl, tokenUrl}` |
+| `tokens.yaml` | `MCP__dropbox__ACCESS` + `MCP__dropbox__REFRESH`, mode 0600 |
+| `permissions.yaml` | `permissions.mcp.allowed` contains `mcp:dropbox` |
+| `tool_search "dropbox"` | 45 `mcp_dropbox_*` tools |
+| `who_am_i` | returns account + team |
+
+Compare against this table rather than against "it seemed to work". Every row
+was observed on a working install. `[verified 2026-11-06]`
 
