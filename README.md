@@ -13,7 +13,7 @@ live tool schemas.
 ## Install
 
 ```bash
-pave install johnmak101-ops/openpave-dropbox-mcp
+pave install cnrai/openpave-dropbox-mcp
 ```
 
 Then read the doctrine from any PAVE session:
@@ -21,6 +21,25 @@ Then read the doctrine from any PAVE session:
 ```
 skill_docs(skill="dropbox-mcp")
 ```
+
+## No formatting skill
+
+**This skill has no formatting skill.** It ships no converter, renderer,
+template, or styling layer, and it does not lay out, brand, or restyle a
+document for you.
+
+- Paper edits are markdown applied to a document that already exists —
+  `paper_edit_content`, `paper_edit_table`, `paper_apply_markdown`,
+  `paper_insert`. The output looks like whatever markdown the caller wrote.
+- `run_file_content_extraction` (markdown/text/OCR/transcript/keyframes) and
+  `transform_file` (PDF/HTML convert, thumbnails, video frames) are Dropbox's
+  own server-side extraction and conversion tools: they return text or emit a
+  new file. They do not style or lay out one.
+- `create_file` writes UTF-8 text only — it cannot build a docx, pdf, or xlsx.
+
+Produce formatted output with a dedicated formatting skill (e.g.
+`openpave-pdf` for branded PDFs, `openpave-deck` for slide decks), then store
+or move the finished artifact with this skill.
 
 ## Relationship to the `dropbox` CLI skill
 

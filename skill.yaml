@@ -10,8 +10,8 @@ author:
   url: https://github.com/johnmak101-ops
 
 license: MIT
-homepage: https://github.com/johnmak101-ops/openpave-dropbox-mcp
-repository: johnmak101-ops/openpave-dropbox-mcp
+homepage: https://github.com/cnrai/openpave-dropbox-mcp
+repository: cnrai/openpave-dropbox-mcp
 
 entrypoint: SKILL.md
 
