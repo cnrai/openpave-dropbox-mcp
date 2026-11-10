@@ -24,14 +24,14 @@ skill_docs(skill="dropbox-mcp")
 
 ### Orchestrated installs
 
-Users can also say `install https://github.com/cnrai/openpave-dropbox-mcp`
-to any live PAVE session (A). A does not run the setup runbook inline: it
-pre-registers the MCP server (the one carded step), spawns a dedicated
-installer session (B) from this repo's committed brief
-([orchestration/brief.template.md](orchestration/brief.template.md)), and
-relays every user question between B and the user — B has no user surface
-of its own. The full doctrine, wire protocol, and failure paths are
-SKILL.md §10.
+A user can also say `install https://github.com/cnrai/openpave-dropbox-mcp`
+to any live PAVE session (A). A does not run the setup runbook itself. A
+registers the server first. This is the one step that shows a card. A then
+spawns an installer session (B) from the committed brief:
+[orchestration/brief.template.md](orchestration/brief.template.md). B runs
+the setup runbook. B sends all user questions to A. A asks the user and
+sends the answers back. SKILL.md §10 has the full flow, the message format,
+and the failure paths.
 
 ## No formatting skill
 
