@@ -22,6 +22,17 @@ Then read the doctrine from any PAVE session:
 skill_docs(skill="dropbox-mcp")
 ```
 
+### Orchestrated installs
+
+Users can also say `install https://github.com/cnrai/openpave-dropbox-mcp`
+to any live PAVE session (A). A does not run the setup runbook inline: it
+pre-registers the MCP server (the one carded step), spawns a dedicated
+installer session (B) from this repo's committed brief
+([orchestration/brief.template.md](orchestration/brief.template.md)), and
+relays every user question between B and the user — B has no user surface
+of its own. The full doctrine, wire protocol, and failure paths are
+SKILL.md §10.
+
 ## No formatting skill
 
 **This skill has no formatting skill.** It ships no converter, renderer,

@@ -335,6 +335,14 @@ objects. `[verified 2026-11-06 — who_am_i/quota/list_folder all stringified]`
    Partly answered: the pins make the entry refresh-**eligible** and
    `capabilities_refresh` returns `installed`, but the 4 h expiry crossing
    itself was still pending when this was written. `[untested — check pending]`
+6. Where inside the sandbox does an installer session source the owner email
+   for the `x-pave-internal-user` header (§9.3)? A settings key presumably
+   carries it, but the canonical location is not pinned. `[untested 2026-11-10]`
+7. Has the §10 orchestrated install run end to end (spawn, relay, watchdog,
+   cancel, ghost-dead-letter)? Designed 2026-11-10 from shipped session-tool
+   semantics; every §10 claim is `[PAVE source — session tool docs]` or
+   `[untested 2026-11-10]` until a live run records results.
+   `[untested 2026-11-10]`
 
 Closed 2026-11-06: PRM discovery + public-client AS admission (was Q1) —
 YES, via `www-authenticate`; DCR acceptance (was Q2) — YES, own client id
@@ -436,7 +444,9 @@ cd ~/.pave/skills/dropbox-mcp && git pull --ff-only
 
 `pave install` can land a stale clone — pull before reading the doctrine, or you
 will follow a version that lacks this runbook. Confirm:
-`grep -c 'Outcome 4' SKILL.md` must be >= 1.
+`grep -c 'Outcome 4' SKILL.md` must be >= 1 — and, for an orchestrated install
+(§10), `grep -c 'INSTALL-QUESTION' SKILL.md` must be >= 1 (the brief's version
+coupling to this runbook).
 `[verified 2026-11-06 — install landed 0.1.1; a pull was required to pick up the 163-line update]`
 
 ### 9.2 Register the server
@@ -487,6 +497,10 @@ copy is a dead end, and the whole lane stalls on it.
 copyable for this user — emit long URLs (e.g. OAuth authorize links) as
 clickable markdown links in the chat reply instead"]`
 
+In an orchestrated install (§10) the presenting session is **A** — the
+installer (B) never renders anything to the user itself; the URL travels in
+an INSTALL-QUESTION and A emits the markdown link.
+
 ### 9.6 Grant and verify
 
 ```yaml
@@ -536,4 +550,170 @@ Whatever the outcome: **never** run `capabilities_add` to recover — it resets
 
 `[untested — the working run installed at ~04:05Z and scheduled this check for
 ~08:05Z rather than waiting; the result was not recorded]`
+
+---
+
+## 10. Install orchestration — A/B session split (the `install <url>` flow)
+
+The canonical trigger is the user telling a normal, user-facing session (A):
+
+```
+install https://github.com/cnrai/openpave-dropbox-mcp
+```
+
+A does not run the §9 runbook inline. A pre-registers the server (the one
+carded step), spawns a dedicated installer session (B) from this repo's
+committed brief, and B executes §9 top to bottom — relaying every user
+contact back through A. Reason: a spawned session has no user surface. Its
+question cards are rendered in a session nobody is watching, so anything in
+B that needs the user deadlocks. `[PAVE source — session_create: spawned
+sessions run the default agent, no user attach; question cards render in
+the session that raises them]` `[untested 2026-11-10 — flow designed from
+shipped tool semantics; first orchestrated run pending]`
+
+Design invariants:
+
+- **B is the hands; A is the mouth and ears.** B runs every step that needs
+  no user. A runs nothing except carded verbs and the relay.
+- **Carded verbs never run in B.** `capabilities_add` always shows a
+  confirmation card `[PAVE source — capabilities_add tool doc]`, and the R10
+  `permission` grant shows one (§1). A pre-runs `capabilities_add`; B
+  grants R10 by editing `~/.pave/permissions.yaml` (§1 path 2 — cardless).
+- **The relay survives compaction.** B's role and A's session id live in a
+  soul file re-read every turn — not in a spawn message that compaction can
+  drop. B cannot re-derive A's id: `get_session_info` returns B's own.
+- **Ids, never titles.** `send_to_session` accepts titles; titles rename and
+  collide, ids do not. Relay to the id in the brief, verbatim.
+
+### 10.1 A — pre-register, spawn, watch
+
+1. Normalize the trigger to `owner/repo` (strip a `https://github.com/`
+   prefix; the bare `owner/repo` form is also valid).
+2. **Single-flight:** if A already spawned a B for this, check
+   `get_session_status` on it; a live B means decline a second spawn.
+3. **Idempotence:** read `~/.pave/mcp/servers.json`. No `dropbox` entry →
+   run `capabilities_add https://mcp.dropbox.com/mcp` here, where the user
+   can accept the card. Entry already present → skip — never add twice
+   (§9.2). Expect `status: error` pre-auth; that is normal, not failure.
+4. `get_session_info` → note A's own session id.
+5. Obtain the brief template **before spawning B** — the skill is not
+   installed yet (B installs it, §9.1): fetch
+   `https://raw.githubusercontent.com/cnrai/openpave-dropbox-mcp/main/orchestration/brief.template.md`
+   (fetch tool or curl); fall back to `git clone --depth 1`. Fill in
+   `<A_ID>` and `<SOURCE>`, write the result into the session working
+   directory as `dropbox-installer-brief.md`.
+6. Spawn B:
+
+```
+session_create(
+  title           = "dropbox-mcp installer — <yyyymmdd-hhmm>",
+  questionTool    = "disabled",
+  hide_chat_input = true,
+  soul            = "dropbox-installer-brief.md",
+  message         = "Read your brief and begin the §9 runbook for: install <SOURCE>")
+```
+
+   `soul` resolves against the caller's session directory and replaces the
+   AGENTS walk on every turn `[PAVE source — session_create tool doc]` —
+   that is what makes the relay compaction-proof. The spawn message stays
+   minimal on purpose: the brief is the single source of truth. B's
+   `question` tool is removed at spawn, so a mistake fails loudly instead
+   of blocking forever on an invisible card. `hide_chat_input` is hygiene
+   (mail injection still works), not a control.
+7. **Watchdog:** `schedule_wake` ~10 min, max 6 wakes. On each wake,
+   `get_session_status` on B. Idle with no terminal status → send one
+   nudge. Second consecutive silent wake → report to the user and offer
+   cancellation (§10.5). Cancel the wake on any terminal status.
+8. Tell the user the install is running and end the turn. Residual work
+   from the same breath ("then list my files") resumes **after** the
+   terminal status arrives, in a later turn.
+
+### 10.2 B — brief, lock, runbook
+
+B's first turn, in order:
+
+1. The brief (soul) is the role definition — follow it, not memory.
+2. **Write-probe + lock:** write `~/.pave/mcp/.dropbox-install.lock`
+   (session id + timestamp). Failure → `INSTALL-FAILED sandbox`
+   immediately — a B that cannot write `~/.pave` must die at step 0, not
+   mid-OAuth. A live lock (< 30 min old, not own id) →
+   `INSTALL-FAILED concurrent <lock session id>`.
+3. `pave install <owner/repo>`; `git pull --ff-only`; staleness greps per
+   §9.1 must find both `Outcome 4` and `INSTALL-QUESTION`.
+4. Read SKILL.md **as a file** (`~/.pave/skills/dropbox-mcp/SKILL.md`) —
+   never `skill_docs`; that sidesteps the skill-enabling question entirely.
+5. **§9.8 known-good check first:** `dropbox.status == installed` and a
+   live `who_am_i` → remove the lock, `INSTALL-DONE already-installed`,
+   no setup.
+6. §9.0 preflight → lane. Execute §9.3 or §9.4, relaying user inputs per
+   §10.3. Grant R10 via the `permissions.yaml` edit (§1 path 2), never the
+   card.
+7. `capabilities_refresh dropbox`, verify per §9.6, clean up per §9.7,
+   remove the lock, send the terminal status.
+
+### 10.3 Wire protocol — plain text, no shared code
+
+B → A, question round. **One send, then end turn. One outstanding round at
+a time; never re-ask while a reply is pending; batch every open question
+into the one send.**
+
+```
+INSTALL-QUESTION v1
+q1: <question text> | options: a, b, c      (or)  | answer: free-text
+q2: ...
+context: <one line of install state>
+```
+
+A → B, reply. The A→B→A bridge mails back the **turn-final text of the
+turn that consumed the question** `[PAVE source — send_to_session
+expect_reply default; one reply round]`. Therefore the turn that consumes
+an INSTALL-QUESTION **ends immediately after** this block — ANSWERS is the
+literal last output of the turn; all other work happens in later turns. A
+never answers via `send_to_session` — that would deliver the answer twice:
+
+```
+ANSWERS v1
+q1: <user's answer, or (dismissed)>
+q2: ...
+```
+
+B greps for `ANSWERS v1` and the `q<N>:` keys; prose around the block is
+tolerated. Numbered keys keep the mapping unambiguous when answers arrive
+out of order or the card is partially dismissed.
+
+One-shots B → A with `expect_reply=false`: `INSTALL-STATUS: <stage>` after
+each §9 stage, then exactly one terminal message —
+`INSTALL-DONE <one-line evidence>` or
+`INSTALL-FAILED <stage + reason>`. A relays milestones to the user
+(registered / awaiting consent / authorized / verified), not every stage.
+On INSTALL-DONE, A schedules the §9.9 refresh check (+4 h wake) and closes
+with the §9.8 known-good table as the summary.
+
+### 10.4 URLs and secrets on the relay
+
+- Long URLs travel inside the INSTALL-QUESTION, but A renders them per
+  §9.5: a clickable markdown link in the chat reply. The card carries only
+  the short "done?" confirmation — card text is not copyable, and a URL in
+  a card is a dead end (§9.5).
+- Short inputs (App Key, authorization code) cross as free-text card
+  answers. Never ask for the App Secret (§9.4 stands); if the user pastes
+  one anyway, A discards it and says so.
+- Only the App Key and the single-use code ever cross the relay.
+  `MCP__dropbox__ACCESS/REFRESH` never leave files and the internal
+  routes. The two crossing values land in A's transcript — accepted: the
+  code is single-use, the App Key is public by design.
+
+### 10.5 Failure and recovery paths
+
+| Situation | Doctrine |
+|---|---|
+| Card dismissed / no answer | A still ends its turn with `q1: (dismissed)` — a silent A is the one stall the protocol cannot heal, because no bridge reply ever fires. B re-asks the same round at most twice, then `INSTALL-FAILED`. |
+| B stalls (busy forever, no status) | A's watchdog wake notices; one nudge; a second consecutive silent wake → A reports to the user and offers cancellation. |
+| User cancels | A: `session_abort` on B (survives with history), then one one-shot to B: "abort — report partial state + run §9.7 cleanup". B replies `INSTALL-FAILED <stage, cleaned>`. |
+| A goes ghost mid-install | B's `send_to_session` reports ghost; B board-posts a dead letter (category: coordination) carrying stage reached, A's id, and the next action, removes the lock, stops. Resume is safe: a fresh run's §9.8 check short-circuits if setup completed. |
+| Concurrent trigger | Lock file (§10.2) plus A's single-flight check. The loser reports and stops; the winner proceeds. |
+
+Whatever the failure path: **never** run `capabilities_add` to recover —
+it resets `auth` to `none` (§9.2). The repair verb is always
+`capabilities_refresh dropbox`.
 
